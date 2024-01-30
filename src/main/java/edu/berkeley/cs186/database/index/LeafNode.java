@@ -12,6 +12,7 @@ import edu.berkeley.cs186.database.table.RecordId;
 import java.nio.ByteBuffer;
 import java.util.*;
 
+
 /**
  * A leaf of a B+ tree. Every leaf in a B+ tree of order d stores between d and
  * 2d (key, record id) pairs and a pointer to its right sibling (i.e. the page
@@ -47,12 +48,14 @@ class LeafNode extends BPlusNode {
     // keys and record ids stored on disk. Thus, consider what happens when you
     // create two LeafNode objects that point to the same page:
     //
-    //   BPlusTreeMetadata meta = ...;
-    //   int pageNum = ...;
-    //   LockContext treeContext = new DummyLockContext();
+    // BPlusTreeMetadata meta = ...;
+    // int pageNum = ...;
+    // LockContext treeContext = new DummyLockContext();
     //
-    //   LeafNode leaf0 = LeafNode.fromBytes(meta, bufferManager, treeContext, pageNum);
-    //   LeafNode leaf1 = LeafNode.fromBytes(meta, bufferManager, treeContext, pageNum);
+    // LeafNode leaf0 = LeafNode.fromBytes(meta, bufferManager, treeContext,
+    // pageNum);
+    // LeafNode leaf1 = LeafNode.fromBytes(meta, bufferManager, treeContext,
+    // pageNum);
     //
     // This scenario looks like this:
     //
@@ -112,18 +115,18 @@ class LeafNode extends BPlusNode {
      * to that page.
      */
     LeafNode(BPlusTreeMetadata metadata, BufferManager bufferManager, List<DataBox> keys,
-             List<RecordId> rids, Optional<Long> rightSibling, LockContext treeContext) {
+            List<RecordId> rids, Optional<Long> rightSibling, LockContext treeContext) {
         this(metadata, bufferManager, bufferManager.fetchNewPage(treeContext, metadata.getPartNum()),
-             keys, rids,
-             rightSibling, treeContext);
+                keys, rids,
+                rightSibling, treeContext);
     }
 
     /**
      * Construct a leaf node that is persisted to page `page`.
      */
     private LeafNode(BPlusTreeMetadata metadata, BufferManager bufferManager, Page page,
-                     List<DataBox> keys,
-                     List<RecordId> rids, Optional<Long> rightSibling, LockContext treeContext) {
+            List<DataBox> keys,
+            List<RecordId> rids, Optional<Long> rightSibling, LockContext treeContext) {
         try {
             assert (keys.size() == rids.size());
             assert (keys.size() <= 2 * metadata.getOrder());
@@ -146,25 +149,60 @@ class LeafNode extends BPlusNode {
     // See BPlusNode.get.
     @Override
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        if (getKey(key).isPresent()) {
+            throw new BPlusTreeException("Key: " + key.toString() + " exists in the tree");
+        }
+        Optional<Pair<DataBox, Long>> result;
+        // It's worth to note that this is kinda a redundant optimization, I could've
+        // used linear search because the # of entries is constant and it never changes.
+        int insertionIndex = Collections.binarySearch(keys, key);
+        // Check the docs of binary search, the insertion index returned is negated.
+        insertionIndex = -insertionIndex - 1;
+        keys.add(insertionIndex, key);
+        rids.add(insertionIndex, rid);
+        if (keys.size() <= metadata.getOrder() * 2) {
+            // Case 1 -> No overflow happens, add the key/rid pair and then call sync().
+            sync();
+            result = Optional.empty();
+        } else {
+            // Case 2 -> Overflow happens, create a node that holds d + 1 entries and leave
+            // the old node with d entries. Note that the first element of the new right
+            // node is not deleted (a.k.a moved) unlike inner node.
+            // Note that current leaf node's right sibling now becomes the
+            // right sibling of the newly-created leaf node
 
-        return Optional.empty();
+            List<DataBox> rightNodeKeys = new ArrayList<>();
+            List<RecordId> rightNodeRecords = new ArrayList<>();
+
+            rightNodeKeys = keys.subList(metadata.getOrder(), keys.size());
+            rightNodeRecords = rids.subList(metadata.getOrder(), rids.size());
+
+            keys = keys.subList(0, metadata.getOrder());
+            rids = rids.subList(0, metadata.getOrder());
+
+            LeafNode newRightNode = new LeafNode(metadata, bufferManager, rightNodeKeys,
+                    rightNodeRecords, rightSibling,
+                    treeContext);
+            rightSibling = Optional.of(newRightNode.page.getPageNum());
+            sync();
+
+            result = Optional
+                    .of(new Pair<DataBox, Long>(newRightNode.keys.get(0), newRightNode.getPage().getPageNum()));
+        }
+        return result;
     }
 
     // See BPlusNode.bulkLoad.
@@ -180,7 +218,12 @@ class LeafNode extends BPlusNode {
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
+        if (keys.contains(key)) {
+            int index = keys.indexOf(key);
+            keys.remove(index);
+            rids.remove(index);
+            sync();
+        }
         return;
     }
 
@@ -258,24 +301,24 @@ class LeafNode extends BPlusNode {
     static int maxOrder(short pageSize, Type keySchema) {
         // A leaf node with n entries takes up the following number of bytes:
         //
-        //   1 + 8 + 4 + n * (keySize + ridSize)
+        // 1 + 8 + 4 + n * (keySize + ridSize)
         //
         // where
         //
-        //   - 1 is the number of bytes used to store isLeaf,
-        //   - 8 is the number of bytes used to store a sibling pointer,
-        //   - 4 is the number of bytes used to store n,
-        //   - keySize is the number of bytes used to store a DataBox of type
-        //     keySchema, and
-        //   - ridSize is the number of bytes of a RecordId.
+        // - 1 is the number of bytes used to store isLeaf,
+        // - 8 is the number of bytes used to store a sibling pointer,
+        // - 4 is the number of bytes used to store n,
+        // - keySize is the number of bytes used to store a DataBox of type
+        // keySchema, and
+        // - ridSize is the number of bytes of a RecordId.
         //
         // Solving the following equation
         //
-        //   n * (keySize + ridSize) + 13 <= pageSizeInBytes
+        // n * (keySize + ridSize) + 13 <= pageSizeInBytes
         //
         // we get
         //
-        //   n = (pageSizeInBytes - 13) / (keySize + ridSize)
+        // n = (pageSizeInBytes - 13) / (keySize + ridSize)
         //
         // The order d is half of n.
         int keySize = keySchema.getSizeInBytes();
@@ -307,7 +350,7 @@ class LeafNode extends BPlusNode {
      * Given a leaf with page number 1 and three (key, rid) pairs (0, (0, 0)),
      * (1, (1, 1)), and (2, (2, 2)), the corresponding dot fragment is:
      *
-     *   node1[label = "{0: (0 0)|1: (1 1)|2: (2 2)}"];
+     * node1[label = "{0: (0 0)|1: (1 1)|2: (2 2)}"];
      */
     @Override
     public String toDot() {
@@ -325,13 +368,13 @@ class LeafNode extends BPlusNode {
     public byte[] toBytes() {
         // When we serialize a leaf node, we write:
         //
-        //   a. the literal value 1 (1 byte) which indicates that this node is a
-        //      leaf node,
-        //   b. the page id (8 bytes) of our right sibling (or -1 if we don't have
-        //      a right sibling),
-        //   c. the number (4 bytes) of (key, rid) pairs this leaf node contains,
-        //      and
-        //   d. the (key, rid) pairs themselves.
+        // a. the literal value 1 (1 byte) which indicates that this node is a
+        // leaf node,
+        // b. the page id (8 bytes) of our right sibling (or -1 if we don't have
+        // a right sibling),
+        // c. the number (4 bytes) of (key, rid) pairs this leaf node contains,
+        // and
+        // d. the (key, rid) pairs themselves.
         //
         // For example, the following bytes:
         //
@@ -372,12 +415,32 @@ class LeafNode extends BPlusNode {
      */
     public static LeafNode fromBytes(BPlusTreeMetadata metadata, BufferManager bufferManager,
                                      LockContext treeContext, long pageNum) {
+
         // TODO(proj2): implement
         // Note: LeafNode has two constructors. To implement fromBytes be sure to
         // use the constructor that reuses an existing page instead of fetching a
         // brand new one.
+        Page page = bufferManager.fetchPage(treeContext, pageNum);
+        Buffer buf = page.getBuffer();
 
-        return null;
+        byte nodeType = buf.get();
+        assert (nodeType == (byte) 1);
+
+        List<DataBox> keys = new ArrayList<>();
+        List<RecordId> rids = new ArrayList<>();
+        Optional<Long> rightSibling = Optional.empty();
+
+        long rightSib = buf.getLong();
+        if (rightSib != -1)
+            rightSibling = Optional.of(rightSib);
+
+        int numOfPairs = buf.getInt();
+        for (int i = 0; i < numOfPairs; i++) {
+            keys.add(DataBox.fromBytes(buf, Type.intType()));
+            rids.add(RecordId.fromBytes(buf));
+        }
+
+        return new LeafNode(metadata, bufferManager, page, keys, rids, rightSibling, treeContext);
     }
 
     // Builtins ////////////////////////////////////////////////////////////////
@@ -391,9 +454,9 @@ class LeafNode extends BPlusNode {
         }
         LeafNode n = (LeafNode) o;
         return page.getPageNum() == n.page.getPageNum() &&
-               keys.equals(n.keys) &&
-               rids.equals(n.rids) &&
-               rightSibling.equals(n.rightSibling);
+                keys.equals(n.keys) &&
+                rids.equals(n.rids) &&
+                rightSibling.equals(n.rightSibling);
     }
 
     @Override
