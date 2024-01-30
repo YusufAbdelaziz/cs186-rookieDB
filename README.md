@@ -21,6 +21,17 @@ In this document, we explain
 - how to submit your code to turn in assignments
 - the general architecture of the released code
 
+## Assignments
+Each assignment is done in a separate branch, you can visit each branch to check for the solution. 
+
+| Assignment                              | Branch Name |
+|-----------------------------------------|-------------|
+| Project 2 : B+ Trees                    | Proj2-tasks |
+| Project 3: Joins and Query Optimization |      -      |
+| Project 4: Concurrency                  |      -      |
+| Project 5: Recovery                     |      -      |
+
+
 ## Fetching the released code
 
 For each project, we will provide a GitHub Classroom link. Follow the
