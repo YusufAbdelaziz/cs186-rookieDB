@@ -181,7 +181,7 @@ public class BPlusTree {
      * Returns an iterator over all the RecordIds stored in the B+ tree in
      * ascending order of their corresponding keys.
      *
-     * // Create a B+ tree and insert some values into it.
+     * - Create a B+ tree and insert some values into it.
      * BPlusTree tree = new BPlusTree("t.txt", Type.intType(), 4);
      * tree.put(new IntDataBox(2), new RecordId(2, (short) 2));
      * tree.put(new IntDataBox(5), new RecordId(5, (short) 5));
@@ -206,9 +206,7 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(ScanType.ALL, null);
     }
 
     /**
@@ -241,7 +239,7 @@ public class BPlusTree {
 
         // TODO(proj2): Return a BPlusTreeIterator.
 
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(ScanType.GREATER_OR_EQUAL, key);
     }
 
     /**
@@ -325,11 +323,18 @@ public class BPlusTree {
         // TODO(proj4_integration): Update the following line
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
-        // TODO(proj2): implement
+        if (scanAll().hasNext())
+            throw new BPlusTreeException("Tree is not empty when bulk loading is done");
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
 
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> splitData = root.bulkLoad(data, fillFactor);
+            if (splitData.isPresent())
+                splitRoot(splitData.get().getFirst(), splitData.get().getSecond());
+
+        }
         return;
     }
 
@@ -464,20 +469,68 @@ public class BPlusTree {
 
     // Iterator ////////////////////////////////////////////////////////////////
     private class BPlusTreeIterator implements Iterator<RecordId> {
-        // TODO(proj2): Add whatever fields and constructors you want here.
+
+        private LeafNode currentLeaf;
+        private List<RecordId> ridsWindow;
+        private int i = 0;
+
+        public BPlusTreeIterator(ScanType scanType, DataBox greaterOrEqualThanKey) {
+            if (scanType.equals(ScanType.ALL)) {
+                if (greaterOrEqualThanKey != null)
+                    throw new IllegalArgumentException("greaterOrEqualThanKey must be null for ScanType.ALL");
+                this.currentLeaf = root.getLeftmostLeaf();
+            } else {
+                if (greaterOrEqualThanKey == null)
+                    throw new IllegalArgumentException(
+                            "greaterOrEqualThanKey must not be null for ScanType.GREATER_OR_EQUAL");
+                this.currentLeaf = root.get(greaterOrEqualThanKey);
+                // The pointer i needs to be pointed exactly on the element that we look for.
+                // Note that root.get just gets the LeafNode in which the key "may" be found.
+                i = currentLeaf.getKeys().indexOf(greaterOrEqualThanKey);
+            }
+            ridsWindow = currentLeaf.getRids();
+        }
 
         @Override
         public boolean hasNext() {
-            // TODO(proj2): implement
 
-            return false;
+            return i != ridsWindow.size() || currentLeaf.getRightSibling().isPresent();
         }
 
         @Override
         public RecordId next() {
-            // TODO(proj2): implement
 
-            throw new NoSuchElementException();
+            if (shouldMoveToNextLeaf()) {
+                moveToNextLeaf();
+            } else if (isEndOfLeafList()) {
+                throw new NoSuchElementException();
+            }
+
+            return getCurrentRecordId();
         }
+
+        private boolean shouldMoveToNextLeaf() {
+            return i == ridsWindow.size() && currentLeaf.getRightSibling().isPresent();
+        }
+
+        private void moveToNextLeaf() {
+            currentLeaf = currentLeaf.getRightSibling().get();
+            ridsWindow = currentLeaf.getRids();
+            i = 0;
+        }
+
+        private boolean isEndOfLeafList() {
+            return i == ridsWindow.size() && !currentLeaf.getRightSibling().isPresent();
+        }
+
+        private RecordId getCurrentRecordId() {
+            return ridsWindow.get(i++);
+        }
+
+    }
+
+    private enum ScanType {
+        GREATER_OR_EQUAL,
+        ALL
     }
 }

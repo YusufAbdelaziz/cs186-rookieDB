@@ -165,6 +165,11 @@ class LeafNode extends BPlusNode {
         if (getKey(key).isPresent()) {
             throw new BPlusTreeException("Key: " + key.toString() + " exists in the tree");
         }
+
+        return putAndSplitNode(key, rid, null);
+    }
+
+    private Optional<Pair<DataBox, Long>> putAndSplitNode(DataBox key, RecordId rid, Float fillFactor) {
         Optional<Pair<DataBox, Long>> result;
         // It's worth to note that this is kinda a redundant optimization, I could've
         // used linear search because the # of entries is constant and it never changes.
@@ -173,34 +178,62 @@ class LeafNode extends BPlusNode {
         insertionIndex = -insertionIndex - 1;
         keys.add(insertionIndex, key);
         rids.add(insertionIndex, rid);
-        if (keys.size() <= metadata.getOrder() * 2) {
-            // Case 1 -> No overflow happens, add the key/rid pair and then call sync().
-            sync();
-            result = Optional.empty();
+        if (fillFactor == null) {
+            if (keys.size() <= metadata.getOrder() * 2) {
+                // Case 1 -> No overflow happens, add the key/rid pair and then call sync().
+                sync();
+                result = Optional.empty();
+            } else {
+                // Case 2 -> Overflow happens, create a node that holds d + 1 entries and leave
+                // the old node with d entries. Note that the first element of the new right
+                // node is not deleted (a.k.a moved) unlike inner node.
+                // Note that current leaf node's right sibling now becomes the
+                // right sibling of the newly-created leaf node
+
+                List<DataBox> rightNodeKeys = new ArrayList<>();
+                List<RecordId> rightNodeRecords = new ArrayList<>();
+
+                rightNodeKeys = keys.subList(metadata.getOrder(), keys.size());
+                rightNodeRecords = rids.subList(metadata.getOrder(), rids.size());
+
+                keys = keys.subList(0, metadata.getOrder());
+                rids = rids.subList(0, metadata.getOrder());
+
+                LeafNode newRightNode = new LeafNode(metadata, bufferManager, rightNodeKeys,
+                        rightNodeRecords, rightSibling,
+                        treeContext);
+                rightSibling = Optional.of(newRightNode.page.getPageNum());
+                sync();
+
+                result = Optional
+                        .of(new Pair<DataBox, Long>(newRightNode.keys.get(0), newRightNode.getPage().getPageNum()));
+            }
+
         } else {
-            // Case 2 -> Overflow happens, create a node that holds d + 1 entries and leave
-            // the old node with d entries. Note that the first element of the new right
-            // node is not deleted (a.k.a moved) unlike inner node.
-            // Note that current leaf node's right sibling now becomes the
-            // right sibling of the newly-created leaf node
+            if (keys.size() <= Math.ceil(metadata.getOrder() * 2 * fillFactor)) {
+                // Case 1 -> No overflow happens, add the key/rid pair and then call sync().
+                sync();
+                result = Optional.empty();
+            } else {
+                List<DataBox> rightNodeKeys = new ArrayList<>();
+                List<RecordId> rightNodeRecords = new ArrayList<>();
 
-            List<DataBox> rightNodeKeys = new ArrayList<>();
-            List<RecordId> rightNodeRecords = new ArrayList<>();
+                rightNodeKeys = keys.subList(keys.size() - 1, keys.size());
+                rightNodeRecords = rids.subList(rids.size() - 1, rids.size());
 
-            rightNodeKeys = keys.subList(metadata.getOrder(), keys.size());
-            rightNodeRecords = rids.subList(metadata.getOrder(), rids.size());
+                /// Current node contains fillFactor * 2* d
+                keys = keys.subList(0, keys.size() - 1);
+                rids = rids.subList(0, rids.size() - 1);
 
-            keys = keys.subList(0, metadata.getOrder());
-            rids = rids.subList(0, metadata.getOrder());
+                LeafNode newRightNode = new LeafNode(metadata, bufferManager, rightNodeKeys,
+                        rightNodeRecords, rightSibling,
+                        treeContext);
+                rightSibling = Optional.of(newRightNode.page.getPageNum());
+                sync();
 
-            LeafNode newRightNode = new LeafNode(metadata, bufferManager, rightNodeKeys,
-                    rightNodeRecords, rightSibling,
-                    treeContext);
-            rightSibling = Optional.of(newRightNode.page.getPageNum());
-            sync();
-
-            result = Optional
-                    .of(new Pair<DataBox, Long>(newRightNode.keys.get(0), newRightNode.getPage().getPageNum()));
+                result = Optional
+                        .of(new Pair<DataBox, Long>(newRightNode.keys.get(0), newRightNode.getPage().getPageNum()));
+            }
         }
         return result;
     }
@@ -209,15 +242,20 @@ class LeafNode extends BPlusNode {
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
-        // TODO(proj2): implement
 
+        while (data.hasNext()) {
+            Pair<DataBox, RecordId> pair = data.next();
+            Optional<Pair<DataBox, Long>> splitInfo = putAndSplitNode(pair.getFirst(), pair.getSecond(), fillFactor);
+            if (splitInfo.isPresent())
+                return splitInfo;
+        }
         return Optional.empty();
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
+
         if (keys.contains(key)) {
             int index = keys.indexOf(key);
             keys.remove(index);
