@@ -19,10 +19,10 @@ public class GHJOperator extends JoinOperator {
     private Run joinedRecords;
 
     public GHJOperator(QueryOperator leftSource,
-                       QueryOperator rightSource,
-                       String leftColumnName,
-                       String rightColumnName,
-                       TransactionContext transaction) {
+            QueryOperator rightSource,
+            String leftColumnName,
+            String rightColumnName,
+            TransactionContext transaction) {
         super(leftSource, rightSource, leftColumnName, rightColumnName, transaction, JoinType.GHJ);
         this.numBuffers = transaction.getWorkMemSize();
         this.stats = this.estimateStats();
@@ -37,7 +37,9 @@ public class GHJOperator extends JoinOperator {
     }
 
     @Override
-    public boolean materialized() { return true; }
+    public boolean materialized() {
+        return true;
+    }
 
     @Override
     public BacktrackingIterator<Record> backtrackingIterator() {
@@ -47,7 +49,8 @@ public class GHJOperator extends JoinOperator {
             // and return an iterator over it once the algorithm completes
             this.joinedRecords = new Run(getTransaction(), getSchema());
             this.run(getLeftSource(), getRightSource(), 1);
-        };
+        }
+        ;
         return joinedRecords.iterator();
     }
 
@@ -62,15 +65,23 @@ public class GHJOperator extends JoinOperator {
      * partitions.
      *
      * @param partitions an array of partitions to split the records into
-     * @param records iterable of records we want to partition
-     * @param left true if records are from the left relation, otherwise false
-     * @param pass the current pass (used to pick a hash function)
+     * @param records    iterable of records we want to partition
+     * @param left       true if records are from the left relation, otherwise false
+     * @param pass       the current pass (used to pick a hash function)
      */
     private void partition(Partition[] partitions, Iterable<Record> records, boolean left, int pass) {
-        // TODO(proj3_part1): implement the partitioning logic
         // You may find the implementation in SHJOperator.java to be a good
         // starting point. You can use the static method HashFunc.hashDataBox
         // to get a hash value.
+        for (Record record : records) {
+            DataBox columnValue = record.getValue(left ? getLeftColumnIndex() : getRightColumnIndex());
+            int hash = HashFunc.hashDataBox(columnValue, pass);
+            int partitionNum = hash % partitions.length;
+            if (partitionNum < 0) {
+                partitionNum += partitions.length;
+            }
+            partitions[partitionNum].add(record);
+        }
         return;
     }
 
@@ -104,14 +115,37 @@ public class GHJOperator extends JoinOperator {
             probeFirst = true;
         } else {
             throw new IllegalArgumentException(
-                "Neither the left nor the right records in this partition " +
-                "fit in B-2 pages of memory."
-            );
+                    "Neither the left nor the right records in this partition " +
+                            "fit in B-2 pages of memory.");
         }
-        // TODO(proj3_part1): implement the building and probing stage
         // You shouldn't refer to any variable starting with "left" or "right"
         // here, use the "build" and "probe" variables we set up for you.
         // Check out how SHJOperator implements this function if you feel stuck.
+
+        // Build phase.
+        HashMap<DataBox, List<Record>> hashTable = new HashMap<>();
+
+        for (Record record : buildRecords) {
+            DataBox columnValue = record.getValue(buildColumnIndex);
+
+            if (!hashTable.containsKey(columnValue)) {
+                hashTable.put(columnValue, new ArrayList<>());
+            }
+
+            hashTable.get(columnValue).add(record);
+        }
+
+        for (Record probeRecord : probeRecords) {
+            DataBox columnValue = probeRecord.getValue(probeColumnIndex);
+            if (!hashTable.containsKey(columnValue))
+                continue;
+
+            for (Record buildRecord : hashTable.get(columnValue)) {
+                Record joinedRecord = probeFirst ? probeRecord.concat(buildRecord) : buildRecord.concat(probeRecord);
+                this.joinedRecords.add(joinedRecord);
+            }
+        }
+
     }
 
     /**
@@ -122,7 +156,8 @@ public class GHJOperator extends JoinOperator {
      */
     private void run(Iterable<Record> leftRecords, Iterable<Record> rightRecords, int pass) {
         assert pass >= 1;
-        if (pass > 5) throw new IllegalStateException("Reached the max number of passes");
+        if (pass > 5)
+            throw new IllegalStateException("Reached the max number of passes");
 
         // Create empty partitions
         Partition[] leftPartitions = createPartitions(true);
@@ -133,9 +168,14 @@ public class GHJOperator extends JoinOperator {
         this.partition(rightPartitions, rightRecords, false, pass);
 
         for (int i = 0; i < leftPartitions.length; i++) {
-            // TODO(proj3_part1): implement the rest of grace hash join
             // If you meet the conditions to run the build and probe you should
             // do so immediately. Otherwise you should make a recursive call.
+            try {
+                buildAndProbe(leftPartitions[i], rightPartitions[i]);
+            } catch (Exception e) {
+                run(leftPartitions[i], rightPartitions[i], pass + 1);
+            }
+
         }
     }
 
@@ -159,13 +199,15 @@ public class GHJOperator extends JoinOperator {
     /**
      * Creates either a regular partition or a smart partition depending on the
      * value of this.useSmartPartition.
+     * 
      * @param left true if this partition will store records from the left
      *             relation, false otherwise
      * @return a partition to store records from the specified partition
      */
     private Partition createPartition(boolean left) {
         Schema schema = getRightSource().getSchema();
-        if (left) schema = getLeftSource().getSchema();
+        if (left)
+            schema = getLeftSource().getSchema();
         return new Partition(getTransaction(), schema);
     }
 
@@ -201,8 +243,19 @@ public class GHJOperator extends JoinOperator {
         ArrayList<Record> leftRecords = new ArrayList<>();
         ArrayList<Record> rightRecords = new ArrayList<>();
 
-        // TODO(proj3_part1): populate leftRecords and rightRecords such that
+        // populate leftRecords and rightRecords such that
         // SHJ breaks when trying to join them but not GHJ
+
+        // B - 1 buffers are needed for partitioning.
+        // B - 2 to do the naive hash join (one buffer for right table, one for output
+        // and B - 2 buffers for the left table)
+        // Having one extra record will result in more pages so SHJ would fail. It may
+        // also fail due to key skew, which is basically some partitions have
+        // more records than the other.
+        for (int i = 0; i < 5 * 4 * (8 + 1); i++) {
+            leftRecords.add(createRecord(i));
+        }
+        // rightRecords.add(createRecord(i));
         return new Pair<>(leftRecords, rightRecords);
     }
 
@@ -222,9 +275,20 @@ public class GHJOperator extends JoinOperator {
     public static Pair<List<Record>, List<Record>> getBreakGHJInputs() {
         ArrayList<Record> leftRecords = new ArrayList<>();
         ArrayList<Record> rightRecords = new ArrayList<>();
-        // TODO(proj3_part1): populate leftRecords and rightRecords such that GHJ breaks
+        // populate leftRecords and rightRecords such that GHJ breaks
 
+        // Creating a partition of duplicates will result in a single one regardless of
+        // the number of passes.
+        // (B - 2) * 8 + 1 = 33.
+
+        // Note that populating one without the other will result in going to a scenario
+        // of building a hash table for the smaller one and probe on the bigger one.
+        // If we want to make GHJ fail, then we need to populate both tables with 33
+        // records so in each pass they always fail to be loaded into the buffers.
+        for (int i = 0; i < 33; i++) {
+            leftRecords.add(createRecord(1));
+            rightRecords.add(createRecord(1));
+        }
         return new Pair<>(leftRecords, rightRecords);
     }
 }
-
