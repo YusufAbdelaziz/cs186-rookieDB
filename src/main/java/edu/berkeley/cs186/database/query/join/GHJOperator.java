@@ -247,8 +247,8 @@ public class GHJOperator extends JoinOperator {
         // SHJ breaks when trying to join them but not GHJ
 
         // B - 1 buffers are needed for partitioning.
-        // B - 2 to do the naive hash join (one buffer for right table, one for output
-        // and B - 2 buffers for the left table)
+        // For each partition, B - 2 buffers are needed to do the naive hash join (one
+        // buffer for right table, one for output and B - 2 buffers for the left table)
         // Having one extra record will result in more pages so SHJ would fail. It may
         // also fail due to key skew, which is basically some partitions have
         // more records than the other.
@@ -278,7 +278,7 @@ public class GHJOperator extends JoinOperator {
         // populate leftRecords and rightRecords such that GHJ breaks
 
         // Creating a partition of duplicates will result in a single one regardless of
-        // the number of passes.
+        // the number of passes (key skewing).
         // (B - 2) * 8 + 1 = 33.
 
         // Note that populating one without the other will result in going to a scenario
